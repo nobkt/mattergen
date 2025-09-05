@@ -4,6 +4,8 @@ properties: []
   # Supported properties:
   # - dft_bulk_modulus
   # - dft_band_gap
+  # - dft_band_gap_center
+  # - dft_band_gap_is_direct
   # - dft_mag_density
   # - ml_bulk_modulus
   # - hhi_score
