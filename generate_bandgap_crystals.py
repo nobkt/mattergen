@@ -17,6 +17,7 @@ Usage examples:
 
 import argparse
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -105,8 +106,9 @@ def main():
     print(cmd)
     print()
     
-    # Execute the command
-    exit_code = os.system(cmd)
+    # Execute the command using subprocess to avoid shell interpretation issues
+    result = subprocess.run(cmd_parts, shell=False)
+    exit_code = result.returncode
     
     if exit_code == 0:
         print(f"\n✓ Successfully generated crystals with band gap {args.band_gap} eV")

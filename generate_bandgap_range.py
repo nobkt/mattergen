@@ -17,6 +17,7 @@ Usage examples:
 
 import argparse
 import os
+import subprocess
 import sys
 from pathlib import Path
 import numpy as np
@@ -127,8 +128,9 @@ def main():
         cmd = " ".join(cmd_parts)
         print(f"  Command: {cmd}")
         
-        # Execute the command
-        exit_code = os.system(cmd)
+        # Execute the command using subprocess to avoid shell interpretation issues
+        result = subprocess.run(cmd_parts, shell=False)
+        exit_code = result.returncode
         
         if exit_code == 0:
             print(f"  ✓ Successfully generated crystals for band gap {band_gap} eV")
