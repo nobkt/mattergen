@@ -399,3 +399,10 @@ FodyWeavers.xsd
 
 # Virtual environment
 .venv/
+
+# Python egg-info directories
+*.egg-info/
+
+# Test output directories
+/tmp/
+test_output/
