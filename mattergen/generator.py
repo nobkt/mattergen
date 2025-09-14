@@ -181,6 +181,7 @@ class CrystalGenerator:
     # Conditional generation
     diffusion_guidance_factor: float = 0.0
     properties_to_condition_on: TargetProperty | None = None
+    chemical_system_mode: str = "exact"
 
     # Additional overrides, only has an effect when using a diffusion-codebase model
     sampling_config_overrides: list[str] | None = None

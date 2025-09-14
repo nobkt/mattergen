@@ -46,11 +46,35 @@ def mask_logits(logits: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
     return logits + (1 - mask) * -1e10
 
 
+def mask_disallowed_elements_with_mode(chemical_system_mode: str = "exact"):
+    """
+    Factory function to create a mask_disallowed_elements function with a specific chemical_system_mode.
+    
+    Args:
+        chemical_system_mode (str): Mode for chemical system conditioning. "exact" means only allow elements 
+            in the specified chemical system (default behavior), "contains" means allow any elements but 
+            bias towards the specified elements to increase their probability.
+    
+    Returns:
+        Callable: A mask_disallowed_elements function with the specified chemical_system_mode.
+    """
+    def mask_func(logits, x=None, batch_idx=None, predictions_are_zero_based=True):
+        return mask_disallowed_elements(
+            logits=logits,
+            x=x,
+            batch_idx=batch_idx,
+            predictions_are_zero_based=predictions_are_zero_based,
+            chemical_system_mode=chemical_system_mode
+        )
+    return mask_func
+
+
 def mask_disallowed_elements(
     logits: torch.FloatTensor,
     x: ChemGraph | None = None,
     batch_idx: torch.LongTensor | None = None,
     predictions_are_zero_based: bool = True,
+    chemical_system_mode: str = "exact",
 ):
     """
     Mask out atom types that are disallowed in general,
@@ -62,6 +86,9 @@ def mask_disallowed_elements(
         batch_idx (torch.LongTensor, optional): Batch indices. Defaults to None. Must be provided if condition is not None.
         predictions_are_zero_based (bool, optional): Whether the logits are zero-based. Defaults to True. Basically, if we're using D3PM,
             the logits are zero-based (model predicts atomic number index)
+        chemical_system_mode (str, optional): Mode for chemical system conditioning. "exact" means only allow elements 
+            in the specified chemical system (default behavior), "contains" means allow any elements but require the 
+            specified elements to be present. Defaults to "exact".
     """
     # First, mask out generally undesired elements
     # (1, num_selected_elements)
@@ -105,22 +132,57 @@ def mask_disallowed_elements(
             device=x["num_atoms"].device,
         )
 
-        keep_logits = torch.where(
-            do_not_mask_atom_logits,
-            keep_all_logits,
-            multi_hot_chemical_system,
-        )
-        # This is converting the 1-based chemical system condition to a 0-based
-        # condition -- we're doing it on the multi-hot representation of the
-        # chemical system, so we need to shift the indices by one.
-        if predictions_are_zero_based:
-            keep_logits = keep_logits[:, 1:]
-            # If we use mask diffusion, logits is shape [batch_size, MAX_ATOMIC_NUM + 1]
-            # instead of [batch_size, MAX_ATOMIC_NUM], so we have to add one dummy column
-            if keep_logits.shape[1] == logits.shape[1] - 1:
-                keep_logits = torch.cat([keep_logits, torch.zeros_like(keep_logits[:, :1])], dim=-1)
-        # Mask out all logits outside the chemical system we condition on
-        logits = mask_logits(logits, keep_logits[batch_idx])
+        if chemical_system_mode == "exact":
+            # Original behavior: only allow elements that are in the specified chemical system
+            keep_logits = torch.where(
+                do_not_mask_atom_logits,
+                keep_all_logits,
+                multi_hot_chemical_system,
+            )
+        elif chemical_system_mode == "contains":
+            # New behavior: allow all elements (no masking based on chemical system)
+            # but bias logits towards the specified elements to increase their probability
+            keep_logits = torch.where(
+                do_not_mask_atom_logits,
+                keep_all_logits,
+                keep_all_logits,  # Don't mask any elements based on chemical system
+            )
+            
+            # Add bias to increase probability of specified elements
+            if not torch.all(do_not_mask_atom_logits):
+                # Create a bias tensor that boosts the logits for specified elements
+                bias_strength = 2.0  # Configurable bias strength
+                bias_tensor = torch.zeros_like(logits)
+                
+                # Get batch indices for atoms that should be biased
+                atoms_to_bias = ~do_not_mask_atom_logits[batch_idx].squeeze(-1)
+                
+                if torch.any(atoms_to_bias):
+                    # Apply bias to the specified chemical system elements
+                    if predictions_are_zero_based:
+                        chemical_system_bias = multi_hot_chemical_system[:, 1:]
+                        if chemical_system_bias.shape[1] == logits.shape[1] - 1:
+                            chemical_system_bias = torch.cat([chemical_system_bias, torch.zeros_like(chemical_system_bias[:, :1])], dim=-1)
+                    else:
+                        chemical_system_bias = multi_hot_chemical_system
+                    
+                    bias_tensor[atoms_to_bias] = chemical_system_bias[batch_idx[atoms_to_bias]] * bias_strength
+                    logits = logits + bias_tensor
+        else:
+            raise ValueError(f"Invalid chemical_system_mode: {chemical_system_mode}. Must be 'exact' or 'contains'.")
+        # Apply masking for "exact" mode only
+        if chemical_system_mode == "exact":
+            # This is converting the 1-based chemical system condition to a 0-based
+            # condition -- we're doing it on the multi-hot representation of the
+            # chemical system, so we need to shift the indices by one.
+            if predictions_are_zero_based:
+                keep_logits = keep_logits[:, 1:]
+                # If we use mask diffusion, logits is shape [batch_size, MAX_ATOMIC_NUM + 1]
+                # instead of [batch_size, MAX_ATOMIC_NUM], so we have to add one dummy column
+                if keep_logits.shape[1] == logits.shape[1] - 1:
+                    keep_logits = torch.cat([keep_logits, torch.zeros_like(keep_logits[:, :1])], dim=-1)
+            # Mask out all logits outside the chemical system we condition on
+            logits = mask_logits(logits, keep_logits[batch_idx])
 
     return logits
 
@@ -182,6 +244,7 @@ class GemNetTDenoiser(ScoreModel):
         property_embeddings: torch.nn.ModuleDict | None = None,
         property_embeddings_adapt: torch.nn.ModuleDict | None = None,
         element_mask_func: Callable | None = None,
+        chemical_system_mode: str = "exact",
         **kwargs,
     ):
         """Construct a GemNetTDenoiser object.
@@ -192,6 +255,9 @@ class GemNetTDenoiser(ScoreModel):
             denoise_atom_types (bool, optional): Whether to denoise the atom  types. Defaults to False.
             atom_type_diffusion (str, optional): Which type of atom type diffusion to use. Defaults to "mask".
             condition_on (Optional[List[str]], optional): Which aspects of the data to condition on. Strings must be in ["property", "chemical_system"]. If None (default), condition on ["chemical_system"].
+            chemical_system_mode (str, optional): Mode for chemical system conditioning. "exact" means only allow elements 
+                in the specified chemical system (default behavior), "contains" means allow any elements but require the 
+                specified elements to be present. Defaults to "exact".
         """
         super(GemNetTDenoiser, self).__init__()
 
@@ -200,6 +266,7 @@ class GemNetTDenoiser(ScoreModel):
         self.hidden_dim = hidden_dim
         self.denoise_atom_types = denoise_atom_types
         self.atom_type_diffusion = atom_type_diffusion
+        self.chemical_system_mode = chemical_system_mode
 
         # torch.nn.ModuleDict: Dict[PropertyName, PropertyEmbedding]
         self.property_embeddings = torch.nn.ModuleDict(property_embeddings or {})
@@ -207,7 +274,19 @@ class GemNetTDenoiser(ScoreModel):
         with_mask_type = self.denoise_atom_types and "mask" in self.atom_type_diffusion
         self.fc_atom = nn.Linear(hidden_dim, MAX_ATOMIC_NUM + int(with_mask_type))
 
-        self.element_mask_func = element_mask_func
+        # Create a wrapped element_mask_func that includes the chemical_system_mode
+        if element_mask_func:
+            def wrapped_element_mask_func(logits, x=None, batch_idx=None, predictions_are_zero_based=True):
+                return element_mask_func(
+                    logits=logits, 
+                    x=x, 
+                    batch_idx=batch_idx, 
+                    predictions_are_zero_based=predictions_are_zero_based,
+                    chemical_system_mode=self.chemical_system_mode
+                )
+            self.element_mask_func = wrapped_element_mask_func
+        else:
+            self.element_mask_func = element_mask_func
 
     def forward(self, x: ChemGraph, t: torch.Tensor) -> ChemGraph:
         """
