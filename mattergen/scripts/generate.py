@@ -29,6 +29,7 @@ def main(
     diffusion_guidance_factor: float | None = None,
     strict_checkpoint_loading: bool = True,
     target_compositions: list[dict[str, int]] | None = None,
+    chemical_system_mode: str = "exact",
 ) -> list[Structure]:
     """
     Evaluate diffusion model against molecular metrics.
@@ -46,6 +47,9 @@ def main(
         strict_checkpoint_loading: Whether to raise an exception when not all parameters from the checkpoint can be matched to the model.
         target_compositions: List of dictionaries with target compositions to condition on. Each dictionary should have the form `{element: number_of_atoms}`. If None, the target compositions are not conditioned on.
            Only supported for models trained for crystal structure prediction (CSP) (default: None)
+        chemical_system_mode: Mode for chemical system conditioning. "exact" means only allow elements 
+           in the specified chemical system (default behavior), "contains" means allow any elements but 
+           bias towards the specified elements to increase their probability. (default: "exact")
 
     NOTE: When specifying dictionary values via the CLI, make sure there is no whitespace between the key and value, e.g., `--properties_to_condition_on={key1:value1}`.
     """
@@ -63,9 +67,16 @@ def main(
     config_overrides = config_overrides or []
     # Disable generating element types which are not supported or not in the desired chemical
     # system (if provided).
-    config_overrides += [
-        "++lightning_module.diffusion_module.model.element_mask_func={_target_:'mattergen.denoiser.mask_disallowed_elements',_partial_:True}"
-    ]
+    if chemical_system_mode == "exact":
+        config_overrides += [
+            "++lightning_module.diffusion_module.model.element_mask_func={_target_:'mattergen.denoiser.mask_disallowed_elements',_partial_:True}"
+        ]
+    elif chemical_system_mode == "contains":
+        config_overrides += [
+            f"++lightning_module.diffusion_module.model.element_mask_func={{_target_:'mattergen.denoiser.mask_disallowed_elements_with_mode',chemical_system_mode:'{chemical_system_mode}'}}"
+        ]
+    else:
+        raise ValueError(f"Invalid chemical_system_mode: {chemical_system_mode}. Must be 'exact' or 'contains'.")
     properties_to_condition_on = properties_to_condition_on or {}
     target_compositions = target_compositions or []
 
