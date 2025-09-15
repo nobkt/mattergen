@@ -152,7 +152,7 @@ def mask_disallowed_elements(
             # Add bias to increase probability of specified elements
             if not torch.all(do_not_mask_atom_logits):
                 # Create a bias tensor that boosts the logits for specified elements
-                bias_strength = 2.0  # Configurable bias strength
+                bias_strength = 1.0  # Moderate bias strength
                 
                 # Get batch indices for atoms that should be biased
                 atoms_to_bias = ~do_not_mask_atom_logits[batch_idx].squeeze(-1)
@@ -170,10 +170,31 @@ def mask_disallowed_elements(
                         if chemical_system_bias.shape[1] == logits.shape[1] - 1:
                             chemical_system_bias = torch.cat([chemical_system_bias, torch.zeros_like(chemical_system_bias[:, :1])], dim=-1)
                     
-                    # Create bias tensor and apply it to the specified atoms
-                    bias_tensor = torch.zeros_like(logits)
-                    bias_tensor[atoms_to_bias] = chemical_system_bias[batch_idx[atoms_to_bias]] * bias_strength
-                    logits = logits + bias_tensor
+                    # Strategy: Only bias a fraction of atoms toward the specified elements
+                    # This ensures the specified elements are present while allowing diversity
+                    num_atoms_to_bias = atoms_to_bias.sum().item()
+                    if num_atoms_to_bias > 0:
+                        # Target: bias roughly 30-50% of atoms toward specified elements
+                        fraction_to_bias_strongly = 0.4
+                        num_strong_bias = max(1, int(num_atoms_to_bias * fraction_to_bias_strongly))
+                        
+                        # Create bias tensor
+                        bias_tensor = torch.zeros_like(logits)
+                        
+                        # Apply strong bias to a subset of atoms
+                        biased_atom_indices = torch.where(atoms_to_bias)[0][:num_strong_bias]
+                        batch_indices_for_biased_atoms = batch_idx[biased_atom_indices]
+                        strong_bias_strength = 3.0  # Stronger bias to ensure presence
+                        bias_tensor[biased_atom_indices] = chemical_system_bias[batch_indices_for_biased_atoms] * strong_bias_strength
+                        
+                        # Apply weak bias to remaining atoms to encourage some diversity
+                        remaining_atom_indices = torch.where(atoms_to_bias)[0][num_strong_bias:]
+                        if len(remaining_atom_indices) > 0:
+                            weak_bias_strength = 0.5
+                            batch_indices_for_weak_bias = batch_idx[remaining_atom_indices]
+                            bias_tensor[remaining_atom_indices] = chemical_system_bias[batch_indices_for_weak_bias] * weak_bias_strength
+                        
+                        logits = logits + bias_tensor
         else:
             raise ValueError(f"Invalid chemical_system_mode: {chemical_system_mode}. Must be 'exact' or 'contains'.")
         
