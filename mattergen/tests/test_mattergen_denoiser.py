@@ -327,7 +327,7 @@ def test_mask_disallowed_elements_contains_mode(zero_based_predictions: bool):
     
     # In contains mode, oxygen should have positive but moderate bias
     assert oxygen_bias_contains > 0, "Oxygen should have positive bias in contains mode"
-    assert oxygen_bias_contains < 1.0, f"Oxygen bias {oxygen_bias_contains:.3f} should be moderate to prevent over-concentration"
+    assert oxygen_bias_contains < 0.05, f"Oxygen bias {oxygen_bias_contains:.3f} should be very moderate to prevent over-concentration"
     assert carbon_bias_contains == 0.0, "Non-specified elements should have no bias in contains mode"
     
     # Test that exact mode still works as before (strong masking)
@@ -353,8 +353,8 @@ def test_mask_disallowed_elements_contains_mode(zero_based_predictions: bool):
     oxygen_fraction = oxygen_count / total_count
     
     # Oxygen should be present but not overwhelmingly dominant
-    assert oxygen_fraction > 0.1, "Oxygen should be present when specified in chemical system"
-    assert oxygen_fraction < 0.9, f"Oxygen fraction {oxygen_fraction:.3f} should not dominate to maintain diversity"
+    assert oxygen_fraction > 0.05, "Oxygen should be present when specified in chemical system"
+    assert oxygen_fraction < 0.7, f"Oxygen fraction {oxygen_fraction:.3f} should not dominate to maintain diversity"
 
 
 @pytest.mark.parametrize("zero_based_predictions", [True, False])
@@ -429,13 +429,13 @@ def test_mask_disallowed_elements_multi_element_bias_scaling(zero_based_predicti
     assert carbon_bias == 0.0, "Non-specified elements should have no bias"
     
     # With 2 elements, bias should be weaker (scaled by 1/num_elements)
-    # Expected bias strength should be around 0.3/2 = 0.15 per element
-    assert li_bias < 0.2, f"Li bias {li_bias:.3f} should be moderate for multi-element system"
-    assert o_bias < 0.2, f"O bias {o_bias:.3f} should be moderate for multi-element system"
+    # Expected bias strength should be around 0.01/2 = 0.005 per element
+    assert li_bias < 0.01, f"Li bias {li_bias:.3f} should be very moderate for multi-element system"
+    assert o_bias < 0.01, f"O bias {o_bias:.3f} should be very moderate for multi-element system"
     
     # Biases should be approximately equal for elements in the same chemical system
     bias_diff = abs(li_bias - o_bias)
-    assert bias_diff < 0.05, f"Li and O should have similar bias strengths, got diff={bias_diff:.3f}"
+    assert bias_diff < 0.002, f"Li and O should have similar bias strengths, got diff={bias_diff:.3f}"
     
     # Create a simple test case with oxygen-only chemical system
     sample = ChemGraph(
@@ -487,4 +487,4 @@ def test_mask_disallowed_elements_multi_element_bias_scaling(zero_based_predicti
     
     # Oxygen should be more common than random chance, but not dominate completely
     oxygen_fraction = oxygen_count / total_samples
-    assert 0.02 < oxygen_fraction < 0.5, f"Oxygen fraction {oxygen_fraction:.3f} should be biased but not dominant"
+    assert 0.02 < oxygen_fraction < 0.3, f"Oxygen fraction {oxygen_fraction:.3f} should be biased but not dominant"

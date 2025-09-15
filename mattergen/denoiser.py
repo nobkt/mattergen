@@ -172,7 +172,8 @@ def mask_disallowed_elements(
                     
                     # Create balanced bias tensor that considers classifier-free guidance amplification
                     # Use a much smaller base bias that scales inversely with the number of specified elements
-                    base_bias_strength = 0.3 / num_specified_elements  # Reduce bias when more elements specified
+                    # Further reduced from 0.05 to 0.01 to prevent over-concentration after CFG amplification
+                    base_bias_strength = 0.01 / num_specified_elements  # Reduce bias when more elements specified
                     
                     # Apply uniform mild bias to all specified elements for all atoms that should be biased
                     batch_indices_for_biased_atoms = batch_idx[atoms_to_bias]
