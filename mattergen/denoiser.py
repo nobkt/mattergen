@@ -280,8 +280,13 @@ class GemNetTDenoiser(ScoreModel):
             sig = inspect.signature(element_mask_func)
             
             def wrapped_element_mask_func(logits, x=None, batch_idx=None, predictions_are_zero_based=True):
-                # Only pass chemical_system_mode if the function accepts it
-                if 'chemical_system_mode' in sig.parameters:
+                # Check if the function accepts chemical_system_mode parameter explicitly or via **kwargs
+                accepts_chemical_system_mode = (
+                    'chemical_system_mode' in sig.parameters or
+                    any(param.kind == param.VAR_KEYWORD for param in sig.parameters.values())
+                )
+                
+                if accepts_chemical_system_mode:
                     return element_mask_func(
                         logits=logits, 
                         x=x, 
