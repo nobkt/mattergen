@@ -1,8 +1,9 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
+import ast
 from functools import partial
-from typing import Callable, Iterable, Sequence
+from typing import Callable, Iterable, Sequence, Union
 
 import torch
 from torch.utils.data import DataLoader, Dataset
@@ -32,10 +33,17 @@ def get_number_of_atoms_condition_loader(
     batch_size: int,
     shuffle: bool = True,
     transforms: list[Transform] | None = None,
-    properties: TargetProperty | None = None,
+    properties: Union[TargetProperty, str, None] = None,
 ) -> ConditionLoader:
     transforms = transforms or []
     if properties is not None:
+        # Handle case where properties might be passed as a string (e.g., from Fire CLI)
+        if isinstance(properties, str):
+            try:
+                properties = ast.literal_eval(properties)
+            except (ValueError, SyntaxError) as e:
+                raise ValueError(f"Failed to parse properties string: {properties}. Error: {e}")
+        
         for k, v in properties.items():
             transforms.append(SetProperty(k, v))
     assert (
