@@ -2,6 +2,7 @@
 # Licensed under the MIT License.
 
 from typing import Callable
+import inspect
 
 import torch
 import torch.nn as nn
@@ -274,16 +275,27 @@ class GemNetTDenoiser(ScoreModel):
         with_mask_type = self.denoise_atom_types and "mask" in self.atom_type_diffusion
         self.fc_atom = nn.Linear(hidden_dim, MAX_ATOMIC_NUM + int(with_mask_type))
 
-        # Create a wrapped element_mask_func that includes the chemical_system_mode
+        # Create a wrapped element_mask_func that includes the chemical_system_mode if needed
         if element_mask_func:
+            sig = inspect.signature(element_mask_func)
+            
             def wrapped_element_mask_func(logits, x=None, batch_idx=None, predictions_are_zero_based=True):
-                return element_mask_func(
-                    logits=logits, 
-                    x=x, 
-                    batch_idx=batch_idx, 
-                    predictions_are_zero_based=predictions_are_zero_based,
-                    chemical_system_mode=self.chemical_system_mode
-                )
+                # Only pass chemical_system_mode if the function accepts it
+                if 'chemical_system_mode' in sig.parameters:
+                    return element_mask_func(
+                        logits=logits, 
+                        x=x, 
+                        batch_idx=batch_idx, 
+                        predictions_are_zero_based=predictions_are_zero_based,
+                        chemical_system_mode=self.chemical_system_mode
+                    )
+                else:
+                    return element_mask_func(
+                        logits=logits, 
+                        x=x, 
+                        batch_idx=batch_idx, 
+                        predictions_are_zero_based=predictions_are_zero_based
+                    )
             self.element_mask_func = wrapped_element_mask_func
         else:
             self.element_mask_func = element_mask_func
