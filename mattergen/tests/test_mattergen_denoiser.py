@@ -251,3 +251,61 @@ def test_mask_disallowed_elements(zero_based_predictions: bool):
             assert set(sampled_types).difference(set(chemsys)) == set()
         else:
             assert set(sampled_types).difference(set(chemsys)) != set()
+
+
+@pytest.mark.parametrize("zero_based_predictions", [True, False])
+def test_mask_disallowed_elements_contains_mode(zero_based_predictions: bool):
+    """Test chemical_system_mode='contains' ensures diversity while biasing toward specified elements"""
+    torch.manual_seed(42)
+    
+    # Create a simple test case with oxygen-only chemical system
+    sample = ChemGraph(
+        pos=torch.rand(10, 3),
+        num_atoms=torch.tensor([10]),
+        atomic_numbers=8 * torch.ones((10,), dtype=torch.int),  # oxygen atoms
+        cell=torch.eye(3),
+    )
+    
+    # Set chemical system to oxygen only
+    sample = set_chemical_system_string(sample)
+    sample.chemical_system = [['O']]  # Override to test oxygen only
+    
+    # Use conditional embedding (not masked)
+    mask = torch.tensor([0], dtype=torch.bool)[:, None]  # Don't mask (use conditional)
+    sample = replace_use_unconditional_embedding(batch=sample, use_unconditional_embedding={"chemical_system": mask})
+    
+    batch_idx = torch.zeros(10, dtype=torch.long)  # All atoms in same batch
+    
+    # Test contains mode
+    logits = torch.randn(10, MAX_ATOMIC_NUM + 1) * 0.1  # Small random logits
+    
+    masked_logits_contains = mask_disallowed_elements(
+        logits=logits,
+        x=sample,
+        batch_idx=batch_idx,
+        predictions_are_zero_based=zero_based_predictions,
+        chemical_system_mode="contains"
+    )
+    
+    # Sample multiple times to test statistical properties
+    samples_list = []
+    for _ in range(50):  # 50 sampling rounds
+        sampled = torch.distributions.Categorical(logits=masked_logits_contains).sample()
+        # Convert to 1-based atomic numbers
+        atomic_numbers = sampled + int(zero_based_predictions)
+        samples_list.extend(atomic_numbers.tolist())
+    
+    # Check results
+    oxygen_count = samples_list.count(8)  # Count oxygen atoms
+    total_samples = len(samples_list)
+    unique_elements = len(set(samples_list))
+    
+    # Validate that contains mode works correctly:
+    # 1. Oxygen should be present (biased toward it)
+    # 2. Other elements should also be present (diversity maintained)
+    assert oxygen_count > 0, "Contains mode should ensure oxygen is present"
+    assert unique_elements > 5, f"Contains mode should maintain diversity, got {unique_elements} unique elements"
+    
+    # Oxygen should be more common than random chance, but not dominate completely
+    oxygen_fraction = oxygen_count / total_samples
+    assert 0.02 < oxygen_fraction < 0.5, f"Oxygen fraction {oxygen_fraction:.3f} should be biased but not dominant"
