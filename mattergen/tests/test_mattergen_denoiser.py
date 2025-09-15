@@ -258,6 +258,185 @@ def test_mask_disallowed_elements_contains_mode(zero_based_predictions: bool):
     """Test chemical_system_mode='contains' ensures diversity while biasing toward specified elements"""
     torch.manual_seed(42)
     
+    # Create test data for oxygen-only chemical system (reproduces reported issue)
+    batch_size = 4
+    num_atoms_per_batch = 8
+    total_atoms = batch_size * num_atoms_per_batch
+    
+    # Create batch with oxygen chemical system
+    samples = []
+    for _ in range(batch_size):
+        sample = ChemGraph(
+            pos=torch.rand(num_atoms_per_batch, 3),
+            num_atoms=torch.tensor([num_atoms_per_batch]),
+            atomic_numbers=8 * torch.ones((num_atoms_per_batch,), dtype=torch.int),  # Oxygen
+            cell=torch.eye(3),
+        )
+        samples.append(set_chemical_system_string(sample))
+    
+    batch = collate(samples)
+    
+    # Create ChemGraph for testing
+    batch_chemgraph = ChemGraph(
+        pos=batch.pos,
+        cell=batch.cell,
+        atomic_numbers=batch.atomic_numbers,
+        num_atoms=batch.num_atoms,
+        chemical_system=batch.chemical_system,
+    )
+    
+    # Set conditional embedding (not masked) to test bias application
+    mask = torch.zeros((batch_size, 1), dtype=torch.bool)  # Use conditional embeddings
+    batch_chemgraph = replace_use_unconditional_embedding(
+        batch=batch_chemgraph, 
+        use_unconditional_embedding={"chemical_system": mask}
+    )
+    
+    # Create test logits
+    example_logits = torch.randn(total_atoms, MAX_ATOMIC_NUM + 1)
+    
+    # Test contains mode
+    masked_logits_contains = mask_disallowed_elements(
+        logits=example_logits.clone(),
+        x=batch_chemgraph,
+        batch_idx=batch.batch,
+        predictions_are_zero_based=zero_based_predictions,
+        chemical_system_mode="contains"
+    )
+    
+    # Compare with exact mode
+    masked_logits_exact = mask_disallowed_elements(
+        logits=example_logits.clone(),
+        x=batch_chemgraph,
+        batch_idx=batch.batch,
+        predictions_are_zero_based=zero_based_predictions,
+        chemical_system_mode="exact"
+    )
+    
+    # Calculate bias applied
+    bias_contains = masked_logits_contains - example_logits
+    bias_exact = masked_logits_exact - example_logits
+    
+    # Oxygen is element 8 (1-based) -> index 7 (0-based) or 8 (1-based) depending on predictions
+    oxygen_idx = 7 if zero_based_predictions else 8
+    carbon_idx = 5 if zero_based_predictions else 6
+    
+    # Test that contains mode applies moderate bias to oxygen
+    oxygen_bias_contains = bias_contains[:, oxygen_idx].mean()
+    carbon_bias_contains = bias_contains[:, carbon_idx].mean()
+    
+    # In contains mode, oxygen should have positive but moderate bias
+    assert oxygen_bias_contains > 0, "Oxygen should have positive bias in contains mode"
+    assert oxygen_bias_contains < 1.0, f"Oxygen bias {oxygen_bias_contains:.3f} should be moderate to prevent over-concentration"
+    assert carbon_bias_contains == 0.0, "Non-specified elements should have no bias in contains mode"
+    
+    # Test that exact mode still works as before (strong masking)
+    carbon_bias_exact = bias_exact[:, carbon_idx].mean()
+    assert carbon_bias_exact < -1e5, "Non-specified elements should be heavily penalized in exact mode"
+    
+    # Test diversity: sample from contains mode and ensure it's not all oxygen
+    probs_contains = torch.softmax(masked_logits_contains, dim=1)
+    samples_contains = torch.multinomial(probs_contains, num_samples=1).squeeze()
+    
+    # Convert to chemical types (account for zero/one-based indexing)
+    if zero_based_predictions:
+        sampled_atomic_numbers = samples_contains + 1
+    else:
+        sampled_atomic_numbers = samples_contains
+    
+    # Count unique elements sampled
+    unique_elements = torch.unique(sampled_atomic_numbers)
+    
+    # Should have some diversity (not all oxygen) while oxygen is still preferred
+    oxygen_count = (sampled_atomic_numbers == 8).sum().item()
+    total_count = len(sampled_atomic_numbers)
+    oxygen_fraction = oxygen_count / total_count
+    
+    # Oxygen should be present but not overwhelmingly dominant
+    assert oxygen_fraction > 0.1, "Oxygen should be present when specified in chemical system"
+    assert oxygen_fraction < 0.9, f"Oxygen fraction {oxygen_fraction:.3f} should not dominate to maintain diversity"
+
+
+@pytest.mark.parametrize("zero_based_predictions", [True, False])
+def test_mask_disallowed_elements_multi_element_bias_scaling(zero_based_predictions: bool):
+    """Test that bias scales appropriately with number of elements in chemical system"""
+    torch.manual_seed(123)
+    
+    # Create test data for multi-element chemical system
+    batch_size = 2
+    num_atoms_per_batch = 10
+    total_atoms = batch_size * num_atoms_per_batch
+    
+    # Create sample with Li-O chemical system
+    samples = []
+    for _ in range(batch_size):
+        # Mix of Li (3) and O (8) atoms
+        atomic_numbers = torch.cat([
+            3 * torch.ones(5, dtype=torch.int),  # Li
+            8 * torch.ones(5, dtype=torch.int),  # O
+        ])
+        sample = ChemGraph(
+            pos=torch.rand(num_atoms_per_batch, 3),
+            num_atoms=torch.tensor([num_atoms_per_batch]),
+            atomic_numbers=atomic_numbers,
+            cell=torch.eye(3),
+        )
+        samples.append(set_chemical_system_string(sample))
+    
+    batch = collate(samples)
+    batch_chemgraph = ChemGraph(
+        pos=batch.pos,
+        cell=batch.cell,
+        atomic_numbers=batch.atomic_numbers,
+        num_atoms=batch.num_atoms,
+        chemical_system=batch.chemical_system,
+    )
+    
+    # Set conditional embedding (not masked)
+    mask = torch.zeros((batch_size, 1), dtype=torch.bool)
+    batch_chemgraph = replace_use_unconditional_embedding(
+        batch=batch_chemgraph, 
+        use_unconditional_embedding={"chemical_system": mask}
+    )
+    
+    # Create test logits
+    example_logits = torch.randn(total_atoms, MAX_ATOMIC_NUM + 1)
+    
+    # Test contains mode
+    masked_logits = mask_disallowed_elements(
+        logits=example_logits.clone(),
+        x=batch_chemgraph,
+        batch_idx=batch.batch,
+        predictions_are_zero_based=zero_based_predictions,
+        chemical_system_mode="contains"
+    )
+    
+    # Calculate bias applied
+    bias = masked_logits - example_logits
+    
+    # Element indices (Li=3, O=8 in 1-based, so Li=2,O=7 in 0-based)
+    li_idx = 2 if zero_based_predictions else 3
+    o_idx = 7 if zero_based_predictions else 8
+    carbon_idx = 5 if zero_based_predictions else 6
+    
+    li_bias = bias[:, li_idx].mean()
+    o_bias = bias[:, o_idx].mean()
+    carbon_bias = bias[:, carbon_idx].mean()
+    
+    # Both Li and O should have positive bias, but weaker than single-element case
+    assert li_bias > 0, "Li should have positive bias when in chemical system"
+    assert o_bias > 0, "O should have positive bias when in chemical system"
+    assert carbon_bias == 0.0, "Non-specified elements should have no bias"
+    
+    # With 2 elements, bias should be weaker (scaled by 1/num_elements)
+    # Expected bias strength should be around 0.3/2 = 0.15 per element
+    assert li_bias < 0.2, f"Li bias {li_bias:.3f} should be moderate for multi-element system"
+    assert o_bias < 0.2, f"O bias {o_bias:.3f} should be moderate for multi-element system"
+    
+    # Biases should be approximately equal for elements in the same chemical system
+    bias_diff = abs(li_bias - o_bias)
+    assert bias_diff < 0.05, f"Li and O should have similar bias strengths, got diff={bias_diff:.3f}"
+    
     # Create a simple test case with oxygen-only chemical system
     sample = ChemGraph(
         pos=torch.rand(10, 3),
