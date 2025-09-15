@@ -279,6 +279,13 @@ mattergen-finetune adapter.pretrained_name=mattergen_base data_module=mp_20 +lig
 #### Multi-property fine-tuning
 You can also fine-tune MatterGen on multiple properties. For instance, to fine-tune it on `dft_mag_density` and `dft_band_gap`, you can use the following command.
 
+> [!TIP]
+> For comprehensive multi-property fine-tuning documentation (including Japanese guide), see:
+> - [Multi-Property Fine-tuning Guide (Japanese)](FINE_TUNING_GUIDE_JP.md) - Complete guide with theory and examples
+> - [Quick Reference](QUICK_REFERENCE.md) - Essential commands and troubleshooting
+> - [Configuration Examples](multi_property_finetuning_examples.conf) - Ready-to-use configurations
+> - [Automated Script](run_multi_property_finetuning.sh) - Complete workflow automation
+
 ```bash
 export PROPERTY1=dft_mag_density
 export PROPERTY2=dft_band_gap 
