@@ -153,25 +153,31 @@ def mask_disallowed_elements(
             if not torch.all(do_not_mask_atom_logits):
                 # Create a bias tensor that boosts the logits for specified elements
                 bias_strength = 2.0  # Configurable bias strength
-                bias_tensor = torch.zeros_like(logits)
                 
                 # Get batch indices for atoms that should be biased
                 atoms_to_bias = ~do_not_mask_atom_logits[batch_idx].squeeze(-1)
                 
                 if torch.any(atoms_to_bias):
                     # Apply bias to the specified chemical system elements
+                    # Create bias mask properly handling 1-based to 0-based conversion
+                    chemical_system_bias = multi_hot_chemical_system
+                    
                     if predictions_are_zero_based:
-                        chemical_system_bias = multi_hot_chemical_system[:, 1:]
+                        # Convert from 1-based chemical system to 0-based predictions
+                        chemical_system_bias = chemical_system_bias[:, 1:]
+                        # If we use mask diffusion, logits is shape [batch_size, MAX_ATOMIC_NUM + 1]
+                        # instead of [batch_size, MAX_ATOMIC_NUM], so we have to add one dummy column
                         if chemical_system_bias.shape[1] == logits.shape[1] - 1:
                             chemical_system_bias = torch.cat([chemical_system_bias, torch.zeros_like(chemical_system_bias[:, :1])], dim=-1)
-                    else:
-                        chemical_system_bias = multi_hot_chemical_system
                     
+                    # Create bias tensor and apply it to the specified atoms
+                    bias_tensor = torch.zeros_like(logits)
                     bias_tensor[atoms_to_bias] = chemical_system_bias[batch_idx[atoms_to_bias]] * bias_strength
                     logits = logits + bias_tensor
         else:
             raise ValueError(f"Invalid chemical_system_mode: {chemical_system_mode}. Must be 'exact' or 'contains'.")
-        # Apply masking for "exact" mode only
+        
+        # Apply restrictive masking for "exact" mode only
         if chemical_system_mode == "exact":
             # This is converting the 1-based chemical system condition to a 0-based
             # condition -- we're doing it on the multi-hot representation of the
